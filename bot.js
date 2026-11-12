@@ -18,13 +18,9 @@ const PUBLIC_URL = (process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
     : (process.env.PUBLIC_URL || `http://localhost:${PORT}`)).replace(/\/$/, '');
 
-// Client ID oficial que carga "Link an account" en Android, iOS y PC sin bloqueos
-
 const NINTENDO_CLIENT_ID = '71b963c1b7b6d119';
 const NINTENDO_REDIRECT_URI = 'npf71b963c1b7b6d119://auth';
 
-// Memoria RAM efímera: solo conserva las cuentas que están ONLINE en este momento.
-// Al pasar a Offline o Desvincular, se eliminan inmediatamente de la RAM.
 const activeSessions = new Map();
 const oauthByState = new Map();
 const oauthByUser = new Map();
@@ -40,22 +36,22 @@ function base64UrlClean(buffer) {
 function createNintendoAuthForUser(discordId = '') {
     const verifier = base64UrlClean(crypto.randomBytes(32));
     const challenge = base64UrlClean(crypto.createHash('sha256').update(verifier).digest());
-    const state = base64UrlClean(crypto.randomBytes(36));
+    const state = base64UrlClean(crypto.randomBytes(32));
 
     const record = { verifier, state, createdAt: Date.now() };
     oauthByState.set(state, record);
     if (discordId) oauthByUser.set(String(discordId), record);
 
-    // Estructura exacta probada que abre directo la pantalla del botón rojo "Select this account"
     const authorizeUrl =
         `https://accounts.nintendo.com/connect/1.0.0/authorize` +
-        `?client_id=${NINTENDO_CLIENT_ID}` +
-        `&redirect_uri=npf${NINTENDO_CLIENT_ID}%3A%2F%2Fauth` +
+        `?state=${state}` +
+        `&redirect_uri=npf${NINTENDO_CLIENT_ID}://auth` +
+        `&client_id=${NINTENDO_CLIENT_ID}` +
+        `&scope=openid%20user%20user.birthday%20user.mii%20user.screenName` +
         `&response_type=session_token_code` +
-        `&scope=openid+user+user.birthday+user.mii+user.screenName` +
         `&session_token_code_challenge=${challenge}` +
         `&session_token_code_challenge_method=S256` +
-        `&state=${state}`;
+        `&theme=login_form`;
 
     return { state, verifier, url: authorizeUrl };
 }
@@ -108,9 +104,6 @@ function syncHostWorkers() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// Interfaz Web de la Bóveda Local (/vault) — Funciona en Android, iOS y PC
-// ══════════════════════════════════════════════════════════════════════
 function renderVaultHtml(uid, oauthState, nintendoUrl) {
     return `<!DOCTYPE html>
 <html lang="es">
@@ -148,7 +141,7 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
 
   <h2 id="title">🛡️ Bóveda Local de Auto-Accept</h2>
   <div class="badge" id="privacy-note">
-    🔒 <b>Privacidad Total:</b> Nosotros <b>NUNCA</b> nos quedamos con tus datos de inicio de sesión. Tu archivo de token se guarda <b>únicamente en la memoria local de tu dispositivo</b>. Al ponerte Offline, se borra de la memoria RAM del servidor al instante.
+    🔒 <b>Privacidad Total:</b> Tus datos de sesión se guardan <b>únicamente en la memoria local de tu dispositivo</b>. Al ponerte Offline, se borran al instante.
   </div>
 
   <label id="lbl-discord">1. Tu ID de Usuario de Discord</label>
@@ -157,45 +150,33 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
   <label id="lbl-fc">2. Tu Código de Amigo de 16 dígitos</label>
   <input type="text" id="friendCode" placeholder="Ej: 9370-0010-9308-6237">
 
-  <!-- Configuración inicial de 1 sola vez -->
   <div id="setup-section" class="step-box">
     <div id="setup-steps">
-      <b>Configuración de 1 sola vez (Android, iOS y PC):</b><br><br>
-      <b>Paso 1:</b> Si aún no tienes tu cuenta abierta en el navegador, toca el botón morado, inicia sesión en <code>accounts.nintendo.com</code> y regresa a esta pestaña.<br>
-      <a href="https://accounts.nintendo.com/login" target="_blank" class="btn-link btn-step1">
-        👤 Paso 1: Iniciar Sesión en Nintendo.com
-      </a>
-      <br>
-      <b>Paso 2:</b> Toca el botón azul para abrir la ventana <i>"Link an account"</i>. <b>NO toques el botón rojo con clic normal</b>: mantén presionado en móvil (o haz clic derecho en PC) sobre el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>
-      <a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary">
-        🔗 Paso 2: Abrir Ventana "Select this account"
-      </a>
+      <b>Configuración (Android, iOS y PC):</b><br><br>
+      <b>Paso 1:</b> Inicia sesión en Nintendo.<br>
+      <a href="https://accounts.nintendo.com/login" target="_blank" class="btn-link btn-step1">👤 Paso 1: Iniciar Sesión en Nintendo.com</a><br>
+      <b>Paso 2:</b> Mantén presionado (o haz clic derecho) en el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>
+      <a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary">🔗 Paso 2: Abrir Ventana Nintendo</a>
     </div>
 
-    <label id="lbl-paste">Paso 3: Pega aquí el enlace copiado del botón rojo (npf71b963...)</label>
+    <label id="lbl-paste">Paso 3: Pega aquí el enlace copiado del botón rojo</label>
     <input type="text" id="copiedLink" placeholder="npf71b963c1b7b6d119://auth#session_token_code=...">
-    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token Localmente en mi Dispositivo</button>
+    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token Localmente</button>
   </div>
 
-  <!-- Opcional dc.bin -->
   <div class="step-box">
-    <label id="lbl-dcbin" style="margin-top:0">📂 Opcional: Añadir archivo dc.bin (Para seguir usando tu cuenta sin desconexiones)</label>
+    <label id="lbl-dcbin" style="margin-top:0">📂 Opcional: Añadir archivo dc.bin de tu cuenta principal</label>
     <input type="file" id="dcBinFile" accept=".bin" onchange="saveDcBin(event)">
     <small id="dcbin-status" style="color:var(--muted)"></small>
   </div>
 
-  <!-- Panel de Control cuando el Token ya está guardado en el dispositivo -->
   <div id="ready-section" class="step-box" style="display:none; border-color: var(--accent);">
     <div id="tok-ready-msg" style="color:#34d399; font-weight:700; margin-bottom:6px;">
-      ✅ Token local listo en tu dispositivo
+      ✅ Token y sesión listos en tu dispositivo
     </div>
-    <small id="offline-hint" style="color:var(--muted); display:block; margin-bottom:10px;">
-      Cuando te pones Online, el Host acepta tus solicitudes automáticamente usando una única IP fija. No necesitas mantener el navegador abierto ni tener internet en tu teléfono.
-    </small>
-
     <button class="btn btn-online" onclick="goOnline()" id="btn-go-online">🟢 PONERSE ONLINE (Activar Auto-Accept)</button>
     <button class="btn btn-offline" onclick="goOffline()" id="btn-go-offline">🔴 SALIR A OFFLINE (Borrar de RAM)</button>
-    <button class="btn btn-unlink" onclick="unlinkToken()" id="btn-unlink">🔓 Desvincular y Borrar Token de mi Dispositivo</button>
+    <button class="btn btn-unlink" onclick="unlinkToken()" id="btn-unlink">🔓 Desvincular y Borrar Token</button>
   </div>
 
   <div id="statusBox" class="status"></div>
@@ -204,61 +185,6 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
 <script>
 const SERVER_STATE = "${oauthState}";
 let currentLang = 'es';
-
-const I18N = {
-  es: {
-    title: '🛡️ Bóveda Local de Auto-Accept',
-    privacy: '🔒 <b>Privacidad Total:</b> Nosotros <b>NUNCA</b> nos quedamos con tus datos de inicio de sesión. Tu archivo de token se guarda <b>únicamente en la memoria local de tu dispositivo</b>. Al ponerte Offline, se borra de la memoria RAM del servidor al instante.',
-    discord: '1. Tu ID de Usuario de Discord',
-    fc: '2. Tu Código de Amigo de 16 dígitos',
-    steps: '<b>Configuración de 1 sola vez (Android, iOS y PC):</b><br><br><b>Paso 1:</b> Si aún no tienes tu cuenta abierta en el navegador, toca el botón morado, inicia sesión en <code>accounts.nintendo.com</code> y regresa a esta pestaña.<br><a href="https://accounts.nintendo.com/login" target="_blank" class="btn-link btn-step1">👤 Paso 1: Iniciar Sesión en Nintendo.com</a><br><b>Paso 2:</b> Toca el botón azul para abrir la ventana <i>"Link an account"</i>. <b>NO toques el botón rojo con clic normal</b>: mantén presionado en móvil (o haz clic derecho en PC) sobre el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br><a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary">🔗 Paso 2: Abrir Ventana "Select this account"</a>',
-    paste: 'Paso 3: Pega aquí el enlace copiado del botón rojo (npf71b963...)',
-    saveTok: '💾 Guardar Token Localmente en mi Dispositivo',
-    dcbin: '📂 Opcional: Añadir archivo dc.bin (Para seguir usando tu cuenta sin desconexiones)',
-    readyMsg: '✅ Token guardado localmente en este dispositivo',
-    hint: 'Cuando te pones Online, el Host acepta tus solicitudes automáticamente usando una única IP fija. No necesitas mantener el navegador abierto ni tener internet en tu teléfono.',
-    online: '🟢 PONERSE ONLINE (Activar Auto-Accept)',
-    offline: '🔴 SALIR A OFFLINE (Borrar de RAM)',
-    unlink: '🔓 Desvincular Token (Borrar de este dispositivo)',
-    unlinkAlert: '✅ El archivo de token ha sido eliminado por completo de tu dispositivo y de la memoria RAM del servidor.\\n\\n🔐 Para tu total tranquilidad, te sugerimos actualizar tu contraseña en accounts.nintendo.com.'
-  },
-  en: {
-    title: '🛡️ Local Auto-Accept Vault',
-    privacy: '🔒 <b>Total Privacy:</b> We <b>NEVER</b> keep your login credentials. Your token file is stored <b>exclusively inside your own device\\'s local storage</b>. When you go Offline, it is wiped from server RAM immediately.',
-    discord: '1. Your Discord User ID',
-    fc: '2. Your 16-digit Friend Code',
-    steps: '<b>One-Time Setup (Android, iOS & PC):</b><br><br><b>Step 1:</b> If you are not signed in yet, tap the purple button, log in at <code>accounts.nintendo.com</code>, and return to this tab.<br><a href="https://accounts.nintendo.com/login" target="_blank" class="btn-link btn-step1">👤 Step 1: Sign In at Nintendo.com</a><br><b>Step 2:</b> Tap the blue button to open the <i>"Link an account"</i> page. <b>DO NOT tap the red button normally</b>: long-press on mobile (or right-click on PC) the red <b>"Select this account"</b> button and select <b>"Copy link address"</b>.<br><a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary">🔗 Step 2: Open "Select this account" Page</a>',
-    paste: 'Step 3: Paste the copied red button link here (npf71b963...)',
-    saveTok: '💾 Save Token Locally to My Device',
-    dcbin: '📂 Optional: Add dc.bin file (Keep playing without disconnects)',
-    readyMsg: '✅ Local Token ready on this device',
-    hint: 'Once Online, the Host accepts friend requests for you using a single fixed IP. You do not need to keep the browser open or stay connected to the internet.',
-    online: '🟢 GO ONLINE (Start Auto-Accept)',
-    offline: '🔴 GO OFFLINE (Wipe from Server RAM)',
-    unlink: '🔓 Unlink Token (Delete from this device)',
-    unlinkAlert: '✅ Your token file has been completely deleted from your device and wiped from server RAM.\\n\\n🔐 For complete peace of mind, we recommend updating your password at accounts.nintendo.com.'
-  }
-};
-
-function setLang(lang) {
-  currentLang = lang;
-  document.getElementById('btn-es').classList.toggle('active', lang === 'es');
-  document.getElementById('btn-en').classList.toggle('active', lang === 'en');
-  const t = I18N[lang];
-  document.getElementById('title').innerHTML = t.title;
-  document.getElementById('privacy-note').innerHTML = t.privacy;
-  document.getElementById('lbl-discord').innerText = t.discord;
-  document.getElementById('lbl-fc').innerText = t.fc;
-  document.getElementById('setup-steps').innerHTML = t.steps;
-  document.getElementById('lbl-paste').innerText = t.paste;
-  document.getElementById('btn-save-tok').innerText = t.saveTok;
-  document.getElementById('lbl-dcbin').innerText = t.dcbin;
-  document.getElementById('tok-ready-msg').innerText = t.readyMsg;
-  document.getElementById('offline-hint').innerText = t.hint;
-  document.getElementById('btn-go-online').innerText = t.online;
-  document.getElementById('btn-go-offline').innerText = t.offline;
-  document.getElementById('btn-unlink').innerText = t.unlink;
-}
 
 function showMsg(msg, ok = true) {
   const b = document.getElementById('statusBox');
@@ -272,11 +198,10 @@ function refreshUI() {
   const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('uid') && !saved.discordId) saved.discordId = urlParams.get('uid');
-  if (urlParams.get('lang')) setLang(urlParams.get('lang'));
 
   if (saved.discordId) document.getElementById('discordId').value = saved.discordId;
   if (saved.friendCode) document.getElementById('friendCode').value = saved.friendCode;
-  if (saved.dcBinB64) document.getElementById('dcbin-status').innerText = '✅ dc.bin guardado localmente (80 bytes)';
+  if (saved.dcBinB64) document.getElementById('dcbin-status').innerText = '✅ dc.bin guardado localmente';
 
   const hasToken = Boolean(saved.sessionToken);
   document.getElementById('setup-section').style.display = hasToken ? 'none' : 'block';
@@ -294,7 +219,7 @@ function saveDcBin(ev) {
     const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
     saved.dcBinB64 = btoa(bin);
     localStorage.setItem('zenith_local_vault', JSON.stringify(saved));
-    document.getElementById('dcbin-status').innerText = '✅ dc.bin guardado en este dispositivo (' + u8.byteLength + ' B)';
+    document.getElementById('dcbin-status').innerText = '✅ dc.bin guardado (' + u8.byteLength + ' B)';
   };
   r.readAsArrayBuffer(f);
 }
@@ -315,7 +240,7 @@ async function generateLocalToken() {
     body: JSON.stringify({ discordId, state: stMatch ? stMatch[1] : SERVER_STATE, code: m[1] })
   });
   const data = await res.json();
-  if (!data.sessionToken) return showMsg(data.error || 'Error al canjear token. Recarga la página e intenta de nuevo.', false);
+  if (!data.sessionToken) return showMsg(data.error || 'Error al canjear token.', false);
 
   const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
   saved.discordId = discordId;
@@ -323,7 +248,7 @@ async function generateLocalToken() {
   saved.sessionToken = data.sessionToken;
   localStorage.setItem('zenith_local_vault', JSON.stringify(saved));
   refreshUI();
-  showMsg('✅ Token guardado localmente en tu dispositivo. Ya puedes tocar PONERSE ONLINE.');
+  showMsg('✅ Token guardado localmente.');
 }
 
 async function goOnline() {
@@ -332,16 +257,13 @@ async function goOnline() {
   saved.friendCode = document.getElementById('friendCode').value.replace(/\\D/g, '');
   localStorage.setItem('zenith_local_vault', JSON.stringify(saved));
 
-  if (!saved.discordId || saved.friendCode.length !== 16 || !saved.sessionToken) {
-    return showMsg('Falta tu ID, Friend Code o Token local.', false);
-  }
   const res = await fetch('/api/online', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(saved)
   });
   const d = await res.json();
-  if (d.ok) showMsg('🟢 ¡ESTÁS ONLINE! El Host ya acepta tus solicitudes con IP única fija. Puedes cerrar esta ventana.');
+  if (d.ok) showMsg('🟢 ¡ESTÁS ONLINE! El Host ya acepta tus solicitudes.');
   else showMsg(d.error || 'Error', false);
 }
 
@@ -352,7 +274,7 @@ async function goOffline() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ discordId: saved.discordId })
   });
-  showMsg('🔴 OFFLINE: Tu sesión fue eliminada de la memoria RAM del servidor.');
+  showMsg('🔴 OFFLINE: Sesión eliminada de RAM.');
 }
 
 async function unlinkToken() {
@@ -365,7 +287,6 @@ async function unlinkToken() {
     });
   }
   localStorage.removeItem('zenith_local_vault');
-  alert(I18N[currentLang].unlinkAlert);
   window.location.reload();
 }
 
@@ -388,12 +309,6 @@ function readJsonBody(req) {
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
 
-    if (urlObj.pathname === '/online' || urlObj.pathname === '/trainer' || urlObj.pathname === '/elite') {
-        const codes = Array.from(activeSessions.values()).map(s => s.friendCode);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify(codes));
-    }
-
     if (urlObj.pathname === '/vault' || urlObj.pathname === '/') {
         const uid = urlObj.searchParams.get('uid') || '';
         const auth = createNintendoAuthForUser(uid);
@@ -406,7 +321,7 @@ const server = http.createServer(async (req, res) => {
         const entry = oauthByState.get(body.state) || oauthByUser.get(String(body.discordId || ''));
         if (!entry) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Sesión expirada. Recarga la Bóveda (F5) y vuelve a abrir el botón del Paso 2.' }));
+            return res.end(JSON.stringify({ error: 'Sesión expirada. Recarga la Bóveda (F5).' }));
         }
         try {
             const sessionToken = await exchangeCodeWithNintendo(body.code, entry.verifier);
@@ -421,10 +336,6 @@ const server = http.createServer(async (req, res) => {
     if (urlObj.pathname === '/api/online' && req.method === 'POST') {
         const body = await readJsonBody(req);
         const cleanFc = String(body.friendCode || '').replace(/\D/g, '');
-        if (!body.discordId || cleanFc.length !== 16 || !body.sessionToken) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Datos incompletos' }));
-        }
         activeSessions.set(String(body.discordId).trim(), {
             friendCode: cleanFc,
             sessionToken: body.sessionToken,
@@ -464,9 +375,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// ══════════════════════════════════════════════════════════════════════
-// Panel de Discord Bilingüe (Español / Inglés)
-// ══════════════════════════════════════════════════════════════════════
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
@@ -479,21 +387,14 @@ function buildMainPanelEmbed() {
     }
     return new EmbedBuilder()
         .setTitle('⚡ Sistema de Auto-Accept — Zenith Rise')
-        .setDescription(
-            '**🇪🇸 Selecciona tu idioma abajo para ver cómo funciona el sistema y abrir tu Bóveda Local.**\n' +
-            '**🇺🇸 Select your language below to learn how the system works and open your Local Vault.**\n\n' +
-            '**Usuarios Online / Active Collectors:**\n' +
-            (lines.length ? lines.join('\n') : '*Nadie online en este momento / No active collectors.*')
-        )
-        .setColor(0x10b981)
-        .setFooter({ text: `Online en RAM: ${lines.length} | 100% Local Device Storage` });
+        .setDescription('**Usuarios Online:**\n' + (lines.length ? lines.join('\n') : '*Nadie online.*'))
+        .setColor(0x10b981);
 }
 
 function buildMainPanelButtons() {
     return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('guide_es').setLabel('🇪🇸 Español (Guía y Bóveda)').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('guide_en').setLabel('🇺🇸 English (Guide & Vault)').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('quick_offline').setLabel('🔴 Salir a Offline / Unlink').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('guide_es').setLabel('🇪🇸 Español (Bóveda)').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('quick_offline').setLabel('🔴 Salir a Offline').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('refresh_panel').setLabel('🔄 Actualizar').setStyle(ButtonStyle.Secondary)
     );
 }
@@ -516,66 +417,21 @@ client.on('interactionCreate', async (interaction) => {
         activeSessions.delete(uid);
         syncHostWorkers();
         await interaction.update({ embeds: [buildMainPanelEmbed()], components: [buildMainPanelButtons()] });
-        return interaction.followUp({
-            content: '🔴 **Offline / RAM Purgada:** Tu sesión activa ha sido borrada de la memoria del servidor inmediatamente.\n*(Si deseas borrar también el archivo local de tu teléfono/PC, entra a tu Bóveda y toca "Desvincular Token").*',
-            ephemeral: true
-        });
+        return interaction.followUp({ content: '🔴 **Offline:** Sesión borrada de RAM.', ephemeral: true });
     }
 
     if (interaction.customId === 'guide_es') {
         const vaultUrl = `${PUBLIC_URL}/vault?uid=${uid}&lang=es`;
         const embedEs = new EmbedBuilder()
-            .setTitle('🇪🇸 Guía Paso a Paso — Sistema Auto-Accept')
+            .setTitle('🇪🇸 Bóveda Local')
             .setColor(0x10b981)
-            .setDescription(
-                '### 🛡️ ¿Cómo funciona y cómo protegemos tu cuenta?\n' +
-                '* **Cero almacenamiento en servidor:** Nosotros **NUNCA** nos quedamos con tus datos de inicio de sesión. Tu token se guarda **únicamente de forma local en tu propio dispositivo**.\n' +
-                '* **1 Única IP Fija + Sin conexión continua:** Al ponerte **Online**, nuestro Host acepta tus solicitudes automáticamente usando una única IP fija (evitando movimientos de IP). Una vez Online, puedes cerrar todo y desconectarte de internet.\n' +
-                '* **Borrado en Offline y Opción de Desvincular:** Al dar **Offline**, el token se borra de la memoria RAM del sistema. Además tienes el botón **Desvincular Token** para eliminar el archivo local de tu dispositivo cuando desees.\n\n' +
-                '### 📋 Pasos para la primera vez (Android, iOS y PC):\n' +
-                '1. Toca el botón de abajo para abrir tu **Bóveda Local**.\n' +
-                '2. **Paso 1:** Toca el botón morado para iniciar sesión en `accounts.nintendo.com` (si te pide código de correo, ingrésalo ahí). Luego regresa a la Bóveda.\n' +
-                '3. **Paso 2:** Toca el botón azul para ir a la página *"Link an account"*. **NO toques el botón rojo normalmente**: mantén presionado en móvil (o haz clic derecho en PC) sobre el botón rojo **"Select this account"** y selecciona **"Copiar dirección de enlace"**.\n' +
-                '4. **Paso 3:** Pega ese enlace en la Bóveda y toca **"💾 Guardar Token Localmente"**.\n' +
-                '5. *(Opcional)* Añade tu archivo `dc.bin` (`/sdcard/Android/data/jp.pokemon.pokemontcgp/files/dc.bin`) para seguir jugando sin desconexiones y toca **🟢 PONERSE ONLINE**.'
-            );
-
+            .setDescription('Toca el botón para abrir tu Bóveda y conectar tu cuenta.');
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel('🔐 Abrir Mi Bóveda Local (Español)')
-                .setStyle(ButtonStyle.Link)
-                .setURL(vaultUrl)
+            new ButtonBuilder().setLabel('🔐 Abrir Mi Bóveda Local').setStyle(ButtonStyle.Link).setURL(vaultUrl)
         );
         return interaction.reply({ embeds: [embedEs], components: [row], ephemeral: true });
     }
-
-    if (interaction.customId === 'guide_en') {
-        const vaultUrl = `${PUBLIC_URL}/vault?uid=${uid}&lang=en`;
-        const embedEn = new EmbedBuilder()
-            .setTitle('🇺🇸 Step-by-Step Guide — Auto-Accept System')
-            .setColor(0x3b82f6)
-            .setDescription(
-                '### 🛡️ How It Works & How Your Account Is Protected\n' +
-                '* **Zero Server Storage:** We **NEVER** keep your login credentials. Your token is saved **exclusively in your own device\'s local storage**.\n' +
-                '* **Single Fixed IP + No Internet Required:** Once you tap **Go Online**, our Host accepts friend requests using a single fixed IP (preventing IP movements). Once Online, you can close the browser and turn off your internet.\n' +
-                '* **Instant RAM Wipe & Unlink Option:** Going **Offline** immediately wipes your token from server RAM. You can also tap **Unlink Token** anytime to delete the local token file from your device.\n\n' +
-                '### 📋 First-Time Setup Steps (Android, iOS & PC):\n' +
-                '1. Tap the button below to open your **Local Vault**.\n' +
-                '2. **Step 1:** Tap the purple button to sign in at `accounts.nintendo.com` (complete email verification there if prompted). Then return to the Vault.\n' +
-                '3. **Step 2:** Tap the blue button to open the *"Link an account"* page. **DO NOT tap the red button normally**: long-press on mobile (or right-click on PC) the red **"Select this account"** button and choose **"Copy link address"**.\n' +
-                '4. **Step 3:** Paste that link into the Vault and tap **"💾 Save Token Locally"**.\n' +
-                '5. *(Optional)* Upload your `dc.bin` file (`/sdcard/Android/data/jp.pokemon.pokemontcgp/files/dc.bin`) to keep playing without disconnects, then tap **🟢 GO ONLINE**.'
-            );
-
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel('🔐 Open My Local Vault (English)')
-                .setStyle(ButtonStyle.Link)
-                .setURL(vaultUrl)
-        );
-        return interaction.reply({ embeds: [embedEn], components: [row], ephemeral: true });
-    }
 });
 
-server.listen(PORT, () => console.log(`[Zenith Vault] Port ${PORT} (${PUBLIC_URL})`));
+server.listen(PORT, () => console.log(`[Zenith Vault] Port ${PORT}`));
 client.login(DISCORD_TOKEN);
