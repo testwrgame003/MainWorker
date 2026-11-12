@@ -20,55 +20,51 @@ const PUBLIC_URL = (process.env.RAILWAY_PUBLIC_DOMAIN
 
 const NINTENDO_CLIENT_ID = '045ab1d9068381b3';
 
-// Memoria efímera (RAM): SOLO guarda las sesiones que están ONLINE en este instante.
-// Al ponerse Offline o Desvincular, se borran por completo con activeSessions.delete(discordId).
-const activeSessions = new Map(); // discordId -> { friendCode, sessionToken, dcBinB64, acceptedCount }
-const oauthVerifiers = new Map(); // state -> { verifier, createdAt }
+// Sesiones en RAM (se borran en cuanto el usuario pasa a Offline)
+const activeSessions = new Map();
+// Verificadores PKCE temporales en memoria
+const oauthVerifiers = new Map();
 let hostSocket = null;
 
-// ══════════════════════════════════════════════════════════════════════
-// Helper: Generar URL OAuth PKCE de Nintendo y canjear session_token_code
-// ══════════════════════════════════════════════════════════════════════
-function createNintendoAuthUrl() {
-    // 1. Generar verifier y challenge en Base64URL limpio (estándar oficial de Nintendo SDK)
-    const verifier = crypto.randomBytes(32)
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=/g, '');
+// Generador de cadenas alfanuméricas limpias (exactamente como exige Nintendo Auth)
+function randomAlphaNum(len) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const bytes = crypto.randomBytes(len);
+    let out = '';
+    for (let i = 0; i < len; i++) {
+        out += chars[bytes[i] % chars.length];
+    }
+    return out;
+}
 
+function createNintendoAuthSession() {
+    // Verifier y State de 50 caracteres alfanuméricos puros (sin símbolos que rompan la URL)
+    const verifier = randomAlphaNum(50);
+    const state = randomAlphaNum(50);
+
+    // SHA-256 Base64URL sin padding '='
     const challenge = crypto.createHash('sha256')
         .update(verifier)
         .digest('base64')
         .replace(/\+/g, '-')
         .replace(/\//g, '_')
-        .replace(/=/g, '');
-
-    // 2. State alfanumérico de 36 bytes en Base64URL
-    const state = crypto.randomBytes(36)
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=/g, '');
+        .replace(/=+$/, '');
 
     oauthVerifiers.set(state, { verifier, createdAt: Date.now() });
 
-    // 3. Scopes exactos permitidos por Nintendo para Pokémon TCG Pocket (045ab1d9068381b3)
-    const params = new URLSearchParams({
-        state: state,
-        redirect_uri: `npf${NINTENDO_CLIENT_ID}://auth`,
-        client_id: NINTENDO_CLIENT_ID,
-        scope: 'openid user user.birthday',
-        response_type: 'session_token_code',
-        session_token_code_challenge: challenge,
-        session_token_code_challenge_method: 'S256',
-        theme: 'login_form'
-    });
+    // Construcción exacta de la URL de autorización de Nintendo para TCG Pocket
+    const authorizeUrl =
+        `https://accounts.nintendo.com/connect/1.0.0/authorize` +
+        `?state=${encodeURIComponent(state)}` +
+        `&redirect_uri=${encodeURIComponent(`npf${NINTENDO_CLIENT_ID}://auth`)}` +
+        `&client_id=${encodeURIComponent(NINTENDO_CLIENT_ID)}` +
+        `&scope=${encodeURIComponent('openid user user.birthday user.mii user.screenName')}` +
+        `&response_type=session_token_code` +
+        `&session_token_code_challenge=${encodeURIComponent(challenge)}` +
+        `&session_token_code_challenge_method=S256` +
+        `&theme=login_form`;
 
-    return {
-        state,
-        url: `https://accounts.nintendo.com/connect/1.0.0/authorize?${params.toString()}`
-    };
+    return { state, url: authorizeUrl };
 }
 
 function exchangeCodeWithNintendo(sessionTokenCode, verifier) {
@@ -92,7 +88,7 @@ function exchangeCodeWithNintendo(sessionTokenCode, verifier) {
                 try {
                     const data = JSON.parse(body);
                     if (data.session_token) return resolve(data.session_token);
-                    reject(new Error(data.error_description || 'Nintendo no devolvió session_token'));
+                    reject(new Error(data.error_description || JSON.stringify(data)));
                 } catch (e) {
                     reject(e);
                 }
@@ -119,10 +115,9 @@ function syncHostWorkers() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// HTML de la Bóveda Local (/vault) — Guarda el Token en el dispositivo del usuario
-// ══════════════════════════════════════════════════════════════════════
-const VAULT_HTML = `<!DOCTYPE html>
+// Renderiza la página con el link de Nintendo YA GENERADO directamente en el HTML (como el Paso 5 de la guía)
+function renderVaultHtml(oauthState, nintendoUrl) {
+    return `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -132,14 +127,15 @@ const VAULT_HTML = `<!DOCTYPE html>
   :root { --bg: #0f172a; --card: #1e293b; --accent: #10b981; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; }
   body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 16px; display: flex; justify-content: center; }
   .container { max-width: 480px; width: 100%; background: var(--card); border-radius: 16px; padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
-  h2 { margin-top: 0; font-size: 1.3rem; display: flex; align-items: center; gap: 8px; }
+  h2 { margin-top: 0; font-size: 1.3rem; }
   .lang-bar { display: flex; gap: 8px; margin-bottom: 16px; }
   .lang-btn { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: var(--text); cursor: pointer; font-weight: 600; }
   .lang-btn.active { border-color: var(--accent); background: rgba(16, 185, 129, 0.15); }
-  .badge { background: rgba(16,185,129,0.15); color: #34d399; padding: 10px 12px; border-radius: 10px; font-size: 0.85rem; line-height: 1.4; margin-bottom: 16px; border: 1px solid rgba(16,185,129,0.3); }
+  .badge { background: rgba(16,185,129,0.15); color: #34d399; padding: 10px 12px; border-radius: 10px; font-size: 0.85rem; line-height: 1.4; margin-bottom: 14px; border: 1px solid rgba(16,185,129,0.3); }
+  .warn-box { background: rgba(239,68,68,0.15); color: #fca5a5; padding: 10px 12px; border-radius: 10px; font-size: 0.83rem; line-height: 1.4; margin-bottom: 14px; border: 1px solid rgba(239,68,68,0.35); }
   label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; font-weight: 600; }
   input[type="text"], input[type="file"] { width: 100%; box-sizing: border-box; padding: 11px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: var(--text); font-size: 0.95rem; }
-  .btn { width: 100%; padding: 12px; border-radius: 10px; border: none; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 12px; transition: opacity 0.2s; }
+  .btn, a.btn-link { display: block; text-align: center; text-decoration: none; width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: none; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 12px; }
   .btn-primary { background: #3b82f6; color: white; }
   .btn-online { background: var(--accent); color: #052e16; }
   .btn-offline { background: #f59e0b; color: #1e293b; }
@@ -157,7 +153,7 @@ const VAULT_HTML = `<!DOCTYPE html>
 
   <h2 id="title">🛡️ Bóveda Local de Auto-Accept</h2>
   <div class="badge" id="privacy-note">
-    🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Cuando te pones Offline, se borra de la memoria RAM del sistema.
+    🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Al ponerte Offline, se borra de la RAM del sistema.
   </div>
 
   <label id="lbl-discord">1. Tu ID de Usuario de Discord</label>
@@ -166,28 +162,33 @@ const VAULT_HTML = `<!DOCTYPE html>
   <label id="lbl-fc">2. Tu Código de Amigo (16 dígitos)</label>
   <input type="text" id="friendCode" placeholder="Ej: 9370-0010-9308-6237">
 
-  <!-- Bloque cuando AÚN NO hay token guardado en el teléfono -->
   <div id="setup-section" class="step-box">
-    <div id="setup-steps">
-      <b>Configuración de 1 sola vez en tu móvil:</b><br>
-      1️⃣ Toca <b>"1. Abrir Página Oficial de Nintendo"</b>.<br>
-      2️⃣ Inicia sesión. En la ventana <i>"Link an account"</i>, <b>NO toques el botón rojo</b>. Mantén presionado el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>
-      3️⃣ Pega ese enlace abajo y toca <b>"Guardar Token en mi Dispositivo"</b>.
+    <div class="warn-box" id="warn-note">
+      ⚠️ <b>ATENCIÓN:</b> Cuando toques el botón azul para ir a Nintendo, <b>NO CIERRES NI RECARGUES ESTA PÁGINA</b> hasta pegar el enlace copiado en el Paso 3.
     </div>
-    <button class="btn btn-primary" onclick="openNintendo()" id="btn-open-nin">1. Abrir Página Oficial de Nintendo</button>
-    <label id="lbl-paste">Pega aquí el enlace copiado (npf045ab...)</label>
+    <div id="setup-steps">
+      <b>Configuración de 1 sola vez:</b><br>
+      <b>Paso 1:</b> Toca el botón azul de abajo para abrir Nintendo en otra pestaña.<br>
+      <b>Paso 2:</b> Inicia sesión. En la ventana <i>"Link an account"</i>, <b>NO hagas clic izquierdo en el botón rojo</b>. Haz clic derecho (o mantén presionado en el celular) sobre el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>
+      <b>Paso 3:</b> Regresa a esta pestaña, pega el enlace abajo y guarda tu Token.
+    </div>
+
+    <!-- Hipervínculo directo idéntico al Paso 5 de la guía -->
+    <a href="${nintendoUrl}" target="_blank" rel="noopener noreferrer" class="btn-link btn-primary" id="btn-open-nin">
+      🔗 Paso 1: Click aquí para iniciar sesión en Nintendo
+    </a>
+
+    <label id="lbl-paste">Paso 3: Pega aquí el enlace copiado (npf045ab...)</label>
     <input type="text" id="copiedLink" placeholder="npf045ab1d9068381b3://auth#session_token_code=...">
-    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">2. Guardar Token en mi Dispositivo</button>
+    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token en mi Dispositivo</button>
   </div>
 
-  <!-- Opcional dc.bin -->
   <div class="step-box">
-    <label id="lbl-dcbin" style="margin-top:0">📂 Opcional: Añadir archivo dc.bin (Para jugar sin desconexiones)</label>
+    <label id="lbl-dcbin" style="margin-top:0">📂 Opcional: Añadir archivo dc.bin (Para jugar a la vez)</label>
     <input type="file" id="dcBinFile" accept=".bin" onchange="saveDcBin(event)">
     <small id="dcbin-status" style="color:var(--muted)"></small>
   </div>
 
-  <!-- Controles rápidos Online / Offline usando el archivo local -->
   <div id="ready-section" class="step-box" style="display:none; border-color: var(--accent);">
     <div id="tok-ready-msg" style="color:#34d399; font-weight:700; margin-bottom:8px;">
       ✅ Token local detectado en tu dispositivo
@@ -204,37 +205,39 @@ const VAULT_HTML = `<!DOCTYPE html>
 </div>
 
 <script>
+const SERVER_OAUTH_STATE = "${oauthState}";
 let currentLang = 'es';
-let currentOauthState = '';
 
 const I18N = {
   es: {
     title: '🛡️ Bóveda Local de Auto-Accept',
-    privacy: '🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Cuando te pones Offline, se borra de la memoria RAM del sistema.',
+    privacy: '🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Al ponerte Offline, se borra de la RAM del sistema.',
+    warn: '⚠️ <b>ATENCIÓN:</b> Cuando toques el botón azul para ir a Nintendo, <b>NO CIERRES NI RECARGUES ESTA PÁGINA</b> hasta pegar el enlace copiado en el Paso 3.',
     discord: '1. Tu ID de Usuario de Discord',
     fc: '2. Tu Código de Amigo (16 dígitos)',
-    steps: '<b>Configuración de 1 sola vez en tu móvil:</b><br>1️⃣ Toca <b>"1. Abrir Página Oficial de Nintendo"</b>.<br>2️⃣ Inicia sesión. En <i>"Link an account"</i>, <b>NO toques el botón rojo</b>. Mantén presionado el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>3️⃣ Pega ese enlace abajo y toca <b>"Guardar Token en mi Dispositivo"</b>.',
-    openNin: '1. Abrir Página Oficial de Nintendo',
-    paste: 'Pega aquí el enlace copiado (npf045ab...)',
-    saveTok: '2. Guardar Token en mi Dispositivo',
+    steps: '<b>Configuración de 1 sola vez:</b><br><b>Paso 1:</b> Toca el botón azul de abajo para abrir Nintendo en otra pestaña.<br><b>Paso 2:</b> Inicia sesión. En <i>"Link an account"</i>, <b>NO toques el botón rojo</b>. Mantén presionado (o clic derecho) sobre el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br><b>Paso 3:</b> Regresa a esta pestaña, pega el enlace abajo y guarda tu Token.',
+    openNin: '🔗 Paso 1: Click aquí para iniciar sesión en Nintendo',
+    paste: 'Paso 3: Pega aquí el enlace copiado (npf045ab...)',
+    saveTok: '💾 Guardar Token en mi Dispositivo',
     dcbin: '📂 Opcional: Añadir archivo dc.bin (Para jugar a la vez)',
     readyMsg: '✅ Token guardado localmente en este dispositivo',
     hint: 'Al ponerte Online, el Host aceptará tus solicitudes con 1 única IP fija. Ya puedes cerrar el navegador o desconectarte de internet.',
     online: '🟢 PONERSE ONLINE (Activar Auto-Accept)',
     offline: '🔴 SALIR A OFFLINE (Borrar de RAM)',
     unlink: '🔓 Desvincular Token (Borrar de este dispositivo)',
-    unlinkAlert: '✅ El archivo de token ha sido eliminado de tu dispositivo y de la memoria del servidor.\\n\\n🔐 Para tu total tranquilidad, te sugerimos actualizar tu contraseña en accounts.nintendo.com para invalidar cualquier sesión anterior.'
+    unlinkAlert: '✅ El archivo de token ha sido eliminado de tu dispositivo y de la memoria del servidor.\\n\\n🔐 Para tu total tranquilidad, te sugerimos actualizar tu contraseña en accounts.nintendo.com.'
   },
   en: {
     title: '🛡️ Local Auto-Accept Vault',
-    privacy: '🔒 <b>Guaranteed Privacy:</b> Your email and password are never seen by us. Your token is stored <b>exclusively in this device\\'s local storage</b>. When you go Offline, it is wiped from the server\\'s RAM immediately.',
+    privacy: '🔒 <b>Guaranteed Privacy:</b> Your email and password are never seen by us. Your token is stored <b>exclusively in this device\\'s local storage</b>. When you go Offline, it is wiped from server RAM immediately.',
+    warn: '⚠️ <b>ATTENTION:</b> When you click the blue link in Step 1, <b>DO NOT CLOSE AND DO NOT REFRESH THIS PAGE</b> until you paste the copied link in Step 3.',
     discord: '1. Your Discord User ID',
     fc: '2. Your 16-digit Friend Code',
-    steps: '<b>One-time setup on your phone:</b><br>1️⃣ Tap <b>"1. Open Official Nintendo Page"</b>.<br>2️⃣ Sign in. On the <i>"Link an account"</i> screen, <b>DO NOT tap the red button</b>. Long-press (or right-click) the red <b>"Select this account"</b> button and select <b>"Copy link address"</b>.<br>3️⃣ Paste that link below and tap <b>"Save Token to My Device"</b>.',
-    openNin: '1. Open Official Nintendo Page',
-    paste: 'Paste the copied link here (npf045ab...)',
-    saveTok: '2. Save Token to My Device',
-    dcbin: '📂 Optional: Add dc.bin file (Play simultaneously without disconnects)',
+    steps: '<b>One-time setup:</b><br><b>Step 1:</b> Tap the blue button below to open Nintendo in a new tab.<br><b>Step 2:</b> Sign in. On the <i>"Link an account"</i> page, <b>DO NOT tap the red button</b>. Long-press (or right-click) the red <b>"Select this account"</b> button and select <b>"Copy link address"</b>.<br><b>Step 3:</b> Return to this tab, paste the link below, and save your Token.',
+    openNin: '🔗 Step 1: Click here to login to Nintendo',
+    paste: 'Step 3: Paste the copied link code here (npf045ab...)',
+    saveTok: '💾 Save Token to My Device',
+    dcbin: '📂 Optional: Add dc.bin file (Play simultaneously)',
     readyMsg: '✅ Local Token detected on your device',
     hint: 'Once Online, the Host accepts friend requests for you using a single dedicated IP. You can close this page or turn off your internet.',
     online: '🟢 GO ONLINE (Start Auto-Accept)',
@@ -251,6 +254,7 @@ function setLang(lang) {
   const t = I18N[lang];
   document.getElementById('title').innerHTML = t.title;
   document.getElementById('privacy-note').innerHTML = t.privacy;
+  document.getElementById('warn-note').innerHTML = t.warn;
   document.getElementById('lbl-discord').innerText = t.discord;
   document.getElementById('lbl-fc').innerText = t.fc;
   document.getElementById('setup-steps').innerHTML = t.steps;
@@ -288,13 +292,6 @@ function refreshUI() {
   document.getElementById('ready-section').style.display = hasToken ? 'block' : 'none';
 }
 
-async function openNintendo() {
-  const res = await fetch('/api/oauth-url');
-  const data = await res.json();
-  currentOauthState = data.state;
-  window.open(data.url, '_blank');
-}
-
 function saveDcBin(ev) {
   const file = ev.target.files[0];
   if (!file) return;
@@ -319,15 +316,19 @@ async function generateLocalToken() {
   if (!discordId || friendCode.length !== 16) return showMsg('Ingresa tu Discord ID y tu Friend Code de 16 dígitos.', false);
 
   const m = copied.match(/session_token_code=([^&\\s]+)/);
-  if (!m) return showMsg('El enlace no contiene session_token_code=', false);
+  if (!m) return showMsg('El enlace pegado no contiene session_token_code=', false);
+
+  // Si el enlace copiado incluye el state de Nintendo, lo usamos directamente para que nunca falle
+  const stateMatch = copied.match(/state=([^&\\s]+)/);
+  const stateToUse = stateMatch ? stateMatch[1] : SERVER_OAUTH_STATE;
 
   const res = await fetch('/api/exchange-token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state: currentOauthState, code: m[1] })
+    body: JSON.stringify({ state: stateToUse, code: m[1] })
   });
   const data = await res.json();
-  if (!data.sessionToken) return showMsg(data.error || 'Error al canjear token', false);
+  if (!data.sessionToken) return showMsg(data.error || 'Error al canjear token. Recarga la página con F5 e intenta de nuevo.', false);
 
   const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
   saved.discordId = discordId;
@@ -380,21 +381,16 @@ async function unlinkToken() {
     });
   }
   localStorage.removeItem('zenith_local_vault');
-  document.getElementById('copiedLink').value = '';
-  document.getElementById('dcbin-status').innerText = '';
-  refreshUI();
+  window.location.reload();
   alert(I18N[currentLang].unlinkAlert);
-  showMsg('🔓 Token eliminado de tu dispositivo.');
 }
 
 window.onload = refreshUI;
 </script>
 </body>
 </html>`;
+}
 
-// ══════════════════════════════════════════════════════════════════════
-// Servidor HTTP + API + WebSocket para el Host
-// ══════════════════════════════════════════════════════════════════════
 function readJsonBody(req) {
     return new Promise((resolve) => {
         let body = '';
@@ -408,38 +404,28 @@ function readJsonBody(req) {
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
 
-    // 1. Endpoint para inject.py (--worker-url https://tu-railway.up.railway.app/online)
     if (urlObj.pathname === '/online' || urlObj.pathname === '/trainer' || urlObj.pathname === '/elite') {
         const codes = Array.from(activeSessions.values()).map(s => s.friendCode);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(codes));
     }
 
-    // 2. Bóveda Web Móvil (/vault)
     if (urlObj.pathname === '/vault' || urlObj.pathname === '/') {
+        const auth = createNintendoAuthSession();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(VAULT_HTML);
+        return res.end(renderVaultHtml(auth.state, auth.url));
     }
 
-    // 3. API para generar link OAuth de Nintendo (no guarda nada tras el canje)
-    if (urlObj.pathname === '/api/oauth-url' && req.method === 'GET') {
-        const data = createNintendoAuthUrl();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify(data));
-    }
-
-    // 4. API para canjear el código y devolver el token AL DISPOSITIVO DEL USUARIO
     if (urlObj.pathname === '/api/exchange-token' && req.method === 'POST') {
         const body = await readJsonBody(req);
         const entry = oauthVerifiers.get(body.state);
         oauthVerifiers.delete(body.state);
         if (!entry) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Sesión expirada. Vuelve a abrir el link de Nintendo.' }));
+            return res.end(JSON.stringify({ error: 'Sesión expirada. Presiona F5 para recargar la página y vuelve a abrir el link del Paso 1.' }));
         }
         try {
             const sessionToken = await exchangeCodeWithNintendo(body.code, entry.verifier);
-            // NO lo guardamos en el servidor; se envía directo al localStorage del usuario
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ sessionToken }));
         } catch (err) {
@@ -448,7 +434,6 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // 5. Ponerse ONLINE (Carga en RAM efímera y avisa al Host)
     if (urlObj.pathname === '/api/online' && req.method === 'POST') {
         const body = await readJsonBody(req);
         const cleanFc = String(body.friendCode || '').replace(/\D/g, '');
@@ -467,7 +452,6 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ ok: true }));
     }
 
-    // 6. Ponerse OFFLINE o Desvincular (Borra de la RAM inmediatamente)
     if (urlObj.pathname === '/api/offline' && req.method === 'POST') {
         const body = await readJsonBody(req);
         activeSessions.delete(String(body.discordId || '').trim());
@@ -480,7 +464,6 @@ const server = http.createServer(async (req, res) => {
     res.end('Not Found');
 });
 
-// WebSocket para conectar tu PC Host (host_main_manager.py)
 const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws) => {
     ws.on('message', (raw) => {
@@ -497,9 +480,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// ══════════════════════════════════════════════════════════════════════
-// Bot de Discord Bilingüe (Español / Inglés)
-// ══════════════════════════════════════════════════════════════════════
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
@@ -551,7 +531,7 @@ client.on('interactionCreate', async (interaction) => {
         syncHostWorkers();
         await interaction.update({ embeds: [buildMainPanelEmbed()], components: [buildMainPanelButtons()] });
         return interaction.followUp({
-            content: '🔴 **Offline / RAM Purgada:** Tu sesión activa ha sido borrada de la memoria del servidor inmediatamente.\n*(Si deseas borrar también el archivo local de tu teléfono, toca "Desvincular Token" dentro de la Bóveda Web y actualiza tu contraseña de Nintendo).*',
+            content: '🔴 **Offline / RAM Purgada:** Tu sesión activa ha sido borrada de la memoria del servidor inmediatamente.',
             ephemeral: true
         });
     }
@@ -565,15 +545,15 @@ client.on('interactionCreate', async (interaction) => {
                 '### 🛡️ ¿Cómo protegemos tu cuenta?\n' +
                 '* **Cero almacenamiento en servidor:** Nosotros **NUNCA** vemos tu correo ni tu contraseña, ni guardamos tu token en ninguna base de datos.\n' +
                 '* **Guardado 100% en tu dispositivo:** La primera vez que creas tu token, se guarda en la memoria local del navegador de **tu propio teléfono/PC**.\n' +
-                '* **Sin gastar datos móviles + 1 Única IP fija:** Una vez que presionas **Ponerse Online**, nuestro Host mantiene tu recepción activa usando **una única IP dedicada para ti** (evitando saltos de IP). Puedes apagar la pantalla o desconectarte de internet.\n' +
+                '* **Sin gastar datos móviles + 1 Única IP fija:** Una vez que presionas **Ponerse Online**, nuestro Host mantiene tu recepción activa usando **una única IP dedicada para ti**. Puedes apagar la pantalla o desconectarte de internet.\n' +
                 '* **Borrado total al dar Offline:** En cuanto presionas **Offline**, tu token desaparece de la memoria RAM del sistema.\n\n' +
-                '### 📋 Pasos para la primera vez (Solo toma 1 minuto):\n' +
+                '### 📋 Pasos para la primera vez:\n' +
                 '1. Abre tu **Bóveda Local** en el botón de abajo.\n' +
-                '2. Toca **"1. Abrir Página Oficial de Nintendo"** e inicia sesión.\n' +
+                '2. Toca **"Paso 1: Click aquí para iniciar sesión en Nintendo"** (no cierres la pestaña de la Bóveda).\n' +
                 '3. En la pantalla *"Link an account"*, **NO toques el botón rojo**. Mantén presionado el botón rojo **"Select this account"** y selecciona **"Copiar dirección de enlace"**.\n' +
                 '4. Regresa a la Bóveda, pega el enlace y toca **"Guardar Token en mi Dispositivo"**.\n' +
-                '5. *(Opcional)* Si quieres jugar en tu celular al mismo tiempo sin que te desconecte, sube tu archivo `dc.bin` (`/sdcard/Android/data/jp.pokemon.pokemontcgp/files/dc.bin`).\n' +
-                '6. Toca **🟢 PONERSE ONLINE**. ¡En tus próximos usos ya no tendrás que pegar el link, solo tocar Ponerse Online!'
+                '5. *(Opcional)* Sube tu archivo `dc.bin` si deseas jugar al mismo tiempo sin desconexiones.\n' +
+                '6. Toca **🟢 PONERSE ONLINE**.'
             );
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setLabel('🔐 Abrir Mi Bóveda Local (Español)').setStyle(ButtonStyle.Link).setURL(vaultLink)
@@ -590,15 +570,15 @@ client.on('interactionCreate', async (interaction) => {
                 '### 🛡️ How Is Your Account Protected?\n' +
                 '* **Zero Server Storage:** We **NEVER** see your email or password, and we never store your token in any database.\n' +
                 '* **100% Local Device Storage:** The first time you generate your token, it is saved exclusively inside **your own phone/PC browser storage**.\n' +
-                '* **No Internet Required After Going Online + Single Dedicated IP:** Once you tap **Go Online**, our Host handles incoming requests using **a single sticky IP assigned to you** (preventing IP jumps). You can lock your phone or go offline.\n' +
+                '* **No Internet Required After Going Online + Single Dedicated IP:** Once you tap **Go Online**, our Host handles incoming requests using **a single sticky IP assigned to you**. You can lock your phone or go offline.\n' +
                 '* **Instant RAM Wipe on Offline:** As soon as you tap **Offline**, your session is completely erased from system RAM.\n\n' +
-                '### 📋 First-Time Setup Steps (Takes 1 minute):\n' +
+                '### 📋 First-Time Setup Steps:\n' +
                 '1. Open your **Local Vault** using the button below.\n' +
-                '2. Tap **"1. Open Official Nintendo Page"** and sign in.\n' +
+                '2. Tap **"Step 1: Click here to login to Nintendo"** (keep the Vault tab open).\n' +
                 '3. On the *"Link an account"* page, **DO NOT tap the red button**. Long-press (or right-click) the red **"Select this account"** button and choose **"Copy link address"**.\n' +
                 '4. Return to the Vault, paste the link, and tap **"Save Token to My Device"**.\n' +
-                '5. *(Optional)* To play on your phone at the exact same time without disconnects, select your `dc.bin` file (`/sdcard/Android/data/jp.pokemon.pokemontcgp/files/dc.bin`).\n' +
-                '6. Tap **🟢 GO ONLINE**. Next time, your device will already have your local token ready with a single tap!'
+                '5. *(Optional)* Select your `dc.bin` file to play at the same time without disconnects.\n' +
+                '6. Tap **🟢 GO ONLINE**.'
             );
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setLabel('🔐 Open My Local Vault (English)').setStyle(ButtonStyle.Link).setURL(vaultLink)
