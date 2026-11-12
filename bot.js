@@ -38,29 +38,21 @@ function randomAlphaNum(len) {
 }
 
 function createNintendoAuthSession() {
-    // Verifier y State de 50 caracteres alfanuméricos puros (sin símbolos que rompan la URL)
-    const verifier = randomAlphaNum(50);
-    const state = randomAlphaNum(50);
-
-    // SHA-256 Base64URL sin padding '='
-    const challenge = crypto.createHash('sha256')
-        .update(verifier)
-        .digest('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const state = crypto.randomBytes(32).toString('base64url');
 
     oauthVerifiers.set(state, { verifier, createdAt: Date.now() });
 
-    // Construcción exacta de la URL de autorización de Nintendo para TCG Pocket
+    // Parámetros exactos que no disparan bloqueo tras verificar el código de correo en Android
     const authorizeUrl =
         `https://accounts.nintendo.com/connect/1.0.0/authorize` +
-        `?state=${encodeURIComponent(state)}` +
-        `&redirect_uri=${encodeURIComponent(`npf${NINTENDO_CLIENT_ID}://auth`)}` +
-        `&client_id=${encodeURIComponent(NINTENDO_CLIENT_ID)}` +
-        `&scope=${encodeURIComponent('openid user user.birthday user.mii user.screenName')}` +
+        `?state=${state}` +
+        `&redirect_uri=npf${NINTENDO_CLIENT_ID}%3A%2F%2Fauth` +
+        `&client_id=${NINTENDO_CLIENT_ID}` +
+        `&scope=openid+user+user.birthday+user.mii+user.screenName` +
         `&response_type=session_token_code` +
-        `&session_token_code_challenge=${encodeURIComponent(challenge)}` +
+        `&session_token_code_challenge=${challenge}` +
         `&session_token_code_challenge_method=S256` +
         `&theme=login_form`;
 
@@ -174,7 +166,16 @@ function renderVaultHtml(oauthState, nintendoUrl) {
     </div>
 
     <!-- Hipervínculo directo idéntico al Paso 5 de la guía -->
-    <a href="/go-nintendo?state=${oauthState}" target="_blank" class="btn-link btn-primary" id="btn-open-nin">
+   <!-- Aviso automático para Android si abrieron desde adentro de Discord -->
+    <div id="android-chrome-box" style="display:none; margin-bottom:12px;">
+      <a id="btn-force-chrome" href="#" class="btn-link" style="background:#f59e0b; color:#0f172a;">
+        📲 Estás en Android: Toca aquí primero para abrir en Chrome (Evita error al verificar correo)
+      </a>
+    </div>
+
+    <a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary" id="btn-open-nin">
+      🔗 Paso 1: Click aquí para iniciar sesión en Nintendo
+    </a>
       🔗 Paso 1: Click aquí para iniciar sesión en Nintendo
     </a>
     <label id="lbl-paste">Paso 3: Pega aquí el enlace copiado (npf045ab...)</label>
@@ -383,7 +384,17 @@ async function unlinkToken() {
   window.location.reload();
   alert(I18N[currentLang].unlinkAlert);
 }
-
+// Si es Android, ofrece saltar directo a Chrome para que al ir a Gmail por el código no se pierda la sesión
+if (/Android/i.test(navigator.userAgent)) {
+  const cleanHostPath = window.location.host + window.location.pathname + window.location.search;
+  const chromeIntent = 'intent://' + cleanHostPath + '#Intent;scheme=https;package=com.android.chrome;end';
+  const box = document.getElementById('android-chrome-box');
+  const btn = document.getElementById('btn-force-chrome');
+  if (box && btn) {
+    box.style.display = 'block';
+    btn.href = chromeIntent;
+  }
+}
 window.onload = refreshUI;
 </script>
 </body>
