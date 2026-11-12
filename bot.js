@@ -20,8 +20,8 @@ const PUBLIC_URL = (process.env.RAILWAY_PUBLIC_DOMAIN
 
 const NINTENDO_CLIENT_ID = '045ab1d9068381b3';
 
-// RAM efímera: solo guarda las sesiones mientras el usuario está ONLINE.
-// En cuanto pasa a Offline o Desvincula, se elimina con activeSessions.delete(discordId).
+// RAM efímera: SOLO mantiene usuarios mientras están ONLINE.
+// Al dar Offline o Desvincular, se borran de la RAM con activeSessions.delete(discordId).
 const activeSessions = new Map();
 const oauthByState = new Map();
 const oauthByUser = new Map();
@@ -43,16 +43,16 @@ function createNintendoAuthForUser(discordId = '') {
     oauthByState.set(state, record);
     if (discordId) oauthByUser.set(String(discordId), record);
 
+    // Flujo web limpio (sin theme=login_form para no romper la verificación de correo 2FA)
     const authorizeUrl =
         `https://accounts.nintendo.com/connect/1.0.0/authorize` +
-        `?state=${state}` +
-        `&redirect_uri=npf${NINTENDO_CLIENT_ID}://auth` +
-        `&client_id=${NINTENDO_CLIENT_ID}` +
-        `&scope=openid%20user%20user.birthday%20user.mii%20user.screenName` +
+        `?client_id=${NINTENDO_CLIENT_ID}` +
+        `&redirect_uri=${encodeURIComponent(`npf${NINTENDO_CLIENT_ID}://auth`)}` +
         `&response_type=session_token_code` +
+        `&scope=${encodeURIComponent('openid user user.birthday user.mii user.screenName')}` +
         `&session_token_code_challenge=${challenge}` +
         `&session_token_code_challenge_method=S256` +
-        `&theme=login_form`;
+        `&state=${state}`;
 
     return { state, verifier, url: authorizeUrl };
 }
@@ -106,7 +106,7 @@ function syncHostWorkers() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Bóveda Local (/vault) — Bilingüe + Botón de Copiar Link para Incógnito
+// Bóveda Local (/vault) — PC & iOS + Subida/Descarga de Archivo Token para Android
 // ══════════════════════════════════════════════════════════════════════
 function renderVaultHtml(uid, oauthState, nintendoUrl) {
     return `<!DOCTYPE html>
@@ -118,22 +118,24 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
 <style>
   :root { --bg: #0f172a; --card: #1e293b; --accent: #10b981; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; }
   body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 16px; display: flex; justify-content: center; }
-  .container { max-width: 490px; width: 100%; background: var(--card); border-radius: 16px; padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
+  .container { max-width: 500px; width: 100%; background: var(--card); border-radius: 16px; padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
   h2 { margin-top: 0; font-size: 1.3rem; }
   .lang-bar { display: flex; gap: 8px; margin-bottom: 16px; }
   .lang-btn { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: var(--text); cursor: pointer; font-weight: 600; }
   .lang-btn.active { border-color: var(--accent); background: rgba(16, 185, 129, 0.15); }
-  .badge { background: rgba(16,185,129,0.15); color: #34d399; padding: 10px 12px; border-radius: 10px; font-size: 0.84rem; line-height: 1.4; margin-bottom: 14px; border: 1px solid rgba(16,185,129,0.3); }
-  .incognito-box { background: rgba(245,158,11,0.14); color: #fcd34d; padding: 11px 12px; border-radius: 10px; font-size: 0.85rem; line-height: 1.45; margin-bottom: 12px; border: 1px solid rgba(245,158,11,0.35); }
+  .badge { background: rgba(16,185,129,0.15); color: #34d399; padding: 10px 12px; border-radius: 10px; font-size: 0.84rem; line-height: 1.4; margin-bottom: 12px; border: 1px solid rgba(16,185,129,0.3); }
+  .android-note { background: rgba(59,130,246,0.14); color: #93c5fd; padding: 10px 12px; border-radius: 10px; font-size: 0.84rem; line-height: 1.4; margin-bottom: 14px; border: 1px solid rgba(59,130,246,0.35); }
   label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; font-weight: 600; }
   input[type="text"], input[type="file"] { width: 100%; box-sizing: border-box; padding: 11px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: var(--text); font-size: 0.92rem; }
-  .btn { display: block; text-align: center; width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: none; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 10px; }
-  .btn-copy { background: #3b82f6; color: white; }
+  .btn, a.btn-link { display: block; text-align: center; text-decoration: none; width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: none; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 10px; }
+  .btn-primary { background: #3b82f6; color: white; }
+  .btn-secondary { background: #475569; color: white; }
   .btn-online { background: var(--accent); color: #052e16; }
   .btn-offline { background: #f59e0b; color: #1e293b; }
   .btn-unlink { background: transparent; border: 1px solid var(--danger); color: #f87171; margin-top: 16px; }
   .step-box { background: #0f172a; padding: 13px; border-radius: 10px; margin-top: 12px; border: 1px solid #334155; font-size: 0.88rem; line-height: 1.45; }
   .status { margin-top: 14px; padding: 12px; border-radius: 8px; font-weight: 600; text-align: center; display: none; }
+  hr { border: none; border-top: 1px solid #334155; margin: 14px 0; }
 </style>
 </head>
 <body>
@@ -145,7 +147,12 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
 
   <h2 id="title">🛡️ Bóveda Local de Auto-Accept</h2>
   <div class="badge" id="privacy-note">
-    🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Cuando te pones Offline, se borra de la memoria RAM del sistema.
+    🔒 <b>Privacidad Garantizada:</b> Nosotros <b>NUNCA</b> nos quedamos con tus datos de inicio de sesión. Tu token se guarda <b>únicamente de forma local en tu dispositivo</b>. Al ponerte Offline, se borra de la memoria RAM del servidor.
+  </div>
+
+  <div class="android-note" id="android-box">
+    📱 <b>¿Usas teléfono Android?</b><br>
+    Debido a los bloqueos del navegador de Android, genera tu Token desde una <b>PC o iPhone</b>, descárgalo con el botón <i>"Descargar Archivo de Token"</i>, pásalo a tu teléfono Android y súbelo aquí abajo en <b>"Importar Archivo de Token"</b>.
   </div>
 
   <label id="lbl-discord">1. Tu ID de Usuario de Discord</label>
@@ -154,43 +161,47 @@ function renderVaultHtml(uid, oauthState, nintendoUrl) {
   <label id="lbl-fc">2. Tu Código de Amigo (16 dígitos)</label>
   <input type="text" id="friendCode" placeholder="Ej: 9370-0010-9308-6237">
 
+  <!-- Creación de Token en PC / iOS o Subida de Archivo desde PC a Móvil -->
   <div id="setup-section" class="step-box">
-    <div class="incognito-box" id="incognito-tip">
-      🕶️ <b>IMPORTANTE EN ANDROID (Samsung / Xiaomi):</b><br>
-      Para evitar el error de <i>"La solicitud no es válida"</i> por cookies antiguas de Chrome, toca <b>"Copiar Link de Nintendo"</b> abajo, abre una <b>Pestaña de Incógnito</b> en tu navegador (o usa el navegador nativo de Xiaomi) y pégalo ahí.
-    </div>
-
     <div id="setup-steps">
-      <b>Pasos (Solo 1 vez):</b><br>
-      <b>1️⃣</b> Toca el botón azul para copiar tu link único de Nintendo y ábrelo en una <b>Pestaña Incógnito</b> (no cierres esta Bóveda).<br>
-      <b>2️⃣</b> Inicia sesión en Nintendo. En la pantalla <i>"Link an account"</i>, <b>NO toques el botón rojo</b>. Mantén presionado el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br>
-      <b>3️⃣</b> Regresa a esta Bóveda, pega ese enlace abajo y toca <b>"Guardar Token en mi Dispositivo"</b>.
+      <b>Opción A — Crear Token desde PC o iOS:</b><br>
+      1️⃣ Abre la página de Nintendo en el botón azul.<br>
+      2️⃣ Inicia sesión. En <i>"Link an account"</i>, haz clic derecho (o mantén presionado en iOS) sobre el botón rojo <b>"Select this account"</b> -> <b>"Copiar dirección de enlace"</b>.<br>
+      3️⃣ Pégalo abajo y guarda tu Token local.
     </div>
 
-    <label id="lbl-nin-link">Enlace de Nintendo (Cópialo y ábrelo en Modo Incógnito):</label>
-    <input type="text" id="nintendoUrlInput" value="${nintendoUrl}" readonly onclick="this.select()">
-    <button class="btn btn-copy" onclick="copyNintendoUrl()" id="btn-copy-nin">📋 Paso 1: Copiar Link para Modo Incógnito</button>
+    <a href="${nintendoUrl}" target="_blank" class="btn-link btn-primary" id="btn-open-nin">
+      🔗 1. Abrir Página Oficial de Nintendo (PC / iOS)
+    </a>
 
-    <label id="lbl-paste">Paso 3: Pega aquí el enlace del botón rojo (npf045ab...)</label>
+    <label id="lbl-paste">2. Pega el enlace del botón rojo (npf045ab...) o tu Token directo:</label>
     <input type="text" id="copiedLink" placeholder="npf045ab1d9068381b3://auth#session_token_code=...">
-    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token en mi Dispositivo</button>
+    <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token en este Dispositivo</button>
+
+    <hr>
+    <div id="import-title"><b>Opción B (Para Android) — Subir Archivo de Token creado en PC:</b></div>
+    <input type="file" id="importTokenFile" accept=".json,.txt" onchange="importTokenFromFile(event)" style="margin-top:6px;">
   </div>
 
+  <!-- Opcional dc.bin -->
   <div class="step-box">
     <label id="lbl-dcbin" style="margin-top:0">📂 Opcional: Añadir archivo dc.bin (Para seguir jugando sin desconexiones)</label>
     <input type="file" id="dcBinFile" accept=".bin" onchange="saveDcBin(event)">
     <small id="dcbin-status" style="color:var(--muted)"></small>
   </div>
 
+  <!-- Sección cuando el Token ya está cargado localmente -->
   <div id="ready-section" class="step-box" style="display:none; border-color: var(--accent);">
-    <div id="tok-ready-msg" style="color:#34d399; font-weight:700; margin-bottom:8px;">
-      ✅ Token local detectado en tu dispositivo
+    <div id="tok-ready-msg" style="color:#34d399; font-weight:700; margin-bottom:6px;">
+      ✅ Token local listo en este dispositivo
     </div>
-    <small id="offline-hint" style="color:var(--muted); display:block; margin-bottom:8px;">
-      Al ponerte Online, el Host aceptará solicitudes por ti con una única IP fija. Puedes cerrar esta página o apagar tu internet.
+    <small id="offline-hint" style="color:var(--muted); display:block; margin-bottom:10px;">
+      Al ponerte Online, el Host aceptará solicitudes por ti usando una única IP fija. Puedes cerrar esta ventana o desconectarte de internet.
     </small>
+
     <button class="btn btn-online" onclick="goOnline()" id="btn-go-online">🟢 PONERSE ONLINE (Activar Auto-Accept)</button>
     <button class="btn btn-offline" onclick="goOffline()" id="btn-go-offline">🔴 SALIR A OFFLINE (Borrar de RAM)</button>
+    <button class="btn btn-secondary" onclick="exportTokenFile()" id="btn-export">📥 Descargar Archivo de Token (Para pasarlo a tu móvil)</button>
     <button class="btn btn-unlink" onclick="unlinkToken()" id="btn-unlink">🔓 Desvincular y Borrar Token de mi Dispositivo</button>
   </div>
 
@@ -204,41 +215,41 @@ let currentLang = 'es';
 const I18N = {
   es: {
     title: '🛡️ Bóveda Local de Auto-Accept',
-    privacy: '🔒 <b>Privacidad Garantizada:</b> Tu correo y contraseña jamás pasan por nosotros. El archivo de token se guarda <b>únicamente en la memoria local de este dispositivo</b>. Cuando te pones Offline, se borra de la memoria RAM del sistema.',
-    incognito: '🕶️ <b>IMPORTANTE EN ANDROID (Samsung / Xiaomi):</b><br>Para evitar el error de <i>"La solicitud no es válida"</i> por cookies antiguas de Chrome, toca <b>"Copiar Link para Modo Incógnito"</b> abajo, abre una <b>Pestaña de Incógnito</b> en tu navegador (o usa el navegador nativo) y pégalo ahí.',
+    privacy: '🔒 <b>Privacidad Garantizada:</b> Nosotros <b>NUNCA</b> nos quedamos con tus datos de inicio de sesión. Tu token se guarda <b>únicamente de forma local en tu dispositivo</b>. Al ponerte Offline, se borra de la memoria RAM del servidor.',
+    android: '📱 <b>¿Usas teléfono Android?</b><br>Genera tu Token desde una <b>PC o iPhone</b>, descárgalo con el botón <i>"Descargar Archivo de Token"</i>, pásalo a tu teléfono Android y súbelo aquí abajo en <b>"Opción B — Subir Archivo de Token"</b>.',
     discord: '1. Tu ID de Usuario de Discord',
     fc: '2. Tu Código de Amigo (16 dígitos)',
-    steps: '<b>Pasos (Solo 1 vez):</b><br><b>1️⃣</b> Toca el botón azul para copiar tu link único de Nintendo y ábrelo en una <b>Pestaña Incógnito</b> (no cierres esta Bóveda).<br><b>2️⃣</b> Inicia sesión en Nintendo. En <i>"Link an account"</i>, <b>NO toques el botón rojo</b>. Mantén presionado el botón rojo <b>"Select this account"</b> y elige <b>"Copiar dirección de enlace"</b>.<br><b>3️⃣</b> Regresa a esta Bóveda, pega ese enlace abajo y toca <b>"Guardar Token en mi Dispositivo"</b>.',
-    ninLink: 'Enlace de Nintendo (Cópialo y ábrelo en Modo Incógnito):',
-    copyBtn: '📋 Paso 1: Copiar Link para Modo Incógnito',
-    copiedOk: '✅ ¡Link copiado! Abre una pestaña en Modo Incógnito, pégalo ahí e inicia sesión.',
-    paste: 'Paso 3: Pega aquí el enlace del botón rojo (npf045ab...)',
-    saveTok: '💾 Guardar Token en mi Dispositivo',
+    steps: '<b>Opción A — Crear Token desde PC o iOS:</b><br>1️⃣ Abre la página de Nintendo en el botón azul.<br>2️⃣ Inicia sesión. En <i>"Link an account"</i>, haz clic derecho (o mantén presionado en iOS) sobre el botón rojo <b>"Select this account"</b> -> <b>"Copiar dirección de enlace"</b>.<br>3️⃣ Pégalo abajo y guarda tu Token local.',
+    openNin: '🔗 1. Abrir Página Oficial de Nintendo (PC / iOS)',
+    paste: '2. Pega el enlace del botón rojo (npf045ab...) o tu Token directo:',
+    saveTok: '💾 Guardar Token en este Dispositivo',
+    importTitle: '<b>Opción B (Para Android) — Subir Archivo de Token creado en PC:</b>',
     dcbin: '📂 Opcional: Añadir archivo dc.bin (Para seguir jugando sin desconexiones)',
     readyMsg: '✅ Token guardado localmente en este dispositivo',
     hint: 'Al ponerte Online, el Host aceptará tus solicitudes con 1 única IP fija. Ya puedes cerrar el navegador o desconectarte de internet.',
     online: '🟢 PONERSE ONLINE (Activar Auto-Accept)',
     offline: '🔴 SALIR A OFFLINE (Borrar de RAM)',
+    exportBtn: '📥 Descargar Archivo de Token (Para pasarlo a tu teléfono)',
     unlink: '🔓 Desvincular Token (Borrar de este dispositivo)',
     unlinkAlert: '✅ El archivo de token ha sido eliminado de tu dispositivo y de la memoria del servidor.\\n\\n🔐 Para tu total tranquilidad, te sugerimos actualizar tu contraseña en accounts.nintendo.com.'
   },
   en: {
     title: '🛡️ Local Auto-Accept Vault',
-    privacy: '🔒 <b>Guaranteed Privacy:</b> Your email and password are never seen by us. Your token is stored <b>exclusively in this device\\'s local storage</b>. When you go Offline, it is wiped from server RAM immediately.',
-    incognito: '🕶️ <b>IMPORTANT FOR ANDROID (Samsung / Xiaomi):</b><br>To prevent the <i>"Invalid Request"</i> error caused by old Chrome cookies, tap <b>"Copy Link for Incognito Mode"</b> below, open an <b>Incognito Tab</b> in your browser, and paste it there.',
+    privacy: '🔒 <b>Guaranteed Privacy:</b> We <b>NEVER</b> keep your login credentials. Your token is stored <b>exclusively inside your own device\\'s local storage</b>. When you go Offline, it is wiped from server RAM immediately.',
+    android: '📱 <b>Using an Android phone?</b><br>Generate your Token on a <b>PC or iPhone</b>, download it using <i>"Download Token File"</i>, send the file to your Android phone, and upload it below under <b>"Option B — Upload Token File"</b>.',
     discord: '1. Your Discord User ID',
     fc: '2. Your 16-digit Friend Code',
-    steps: '<b>One-time setup:</b><br><b>1️⃣</b> Tap the blue button to copy your Nintendo link and open it in an <b>Incognito Tab</b> (keep this Vault tab open).<br><b>2️⃣</b> Sign in to Nintendo. On the <i>"Link an account"</i> screen, <b>DO NOT tap the red button</b>. Long-press (or right-click) the red <b>"Select this account"</b> button and select <b>"Copy link address"</b>.<br><b>3️⃣</b> Return to this Vault, paste the link below, and tap <b>"Save Token to My Device"</b>.',
-    ninLink: 'Nintendo Link (Copy & open in Incognito Mode):',
-    copyBtn: '📋 Step 1: Copy Link for Incognito Mode',
-    copiedOk: '✅ Link copied! Open an Incognito Tab in your browser, paste it there, and sign in.',
-    paste: 'Step 3: Paste the red button link here (npf045ab...)',
-    saveTok: '💾 Save Token to My Device',
+    steps: '<b>Option A — Create Token on PC or iOS:</b><br>1️⃣ Open the Nintendo page using the blue button.<br>2️⃣ Sign in. On the <i>"Link an account"</i> screen, right-click (or long-press on iOS) the red <b>"Select this account"</b> button -> <b>"Copy link address"</b>.<br>3️⃣ Paste it below and save your local Token.',
+    openNin: '🔗 1. Open Official Nintendo Page (PC / iOS)',
+    paste: '2. Paste the red button link (npf045ab...) or raw Token:',
+    saveTok: '💾 Save Token to This Device',
+    importTitle: '<b>Option B (For Android) — Upload Token File created on PC:</b>',
     dcbin: '📂 Optional: Add dc.bin file (Play simultaneously without disconnects)',
-    readyMsg: '✅ Local Token detected on your device',
-    hint: 'Once Online, the Host accepts friend requests for you using a single dedicated IP. You can close this page or turn off your internet.',
+    readyMsg: '✅ Local Token ready on this device',
+    hint: 'Once Online, the Host accepts friend requests for you using a single fixed IP. You can close this window or turn off your internet.',
     online: '🟢 GO ONLINE (Start Auto-Accept)',
     offline: '🔴 GO OFFLINE (Wipe from Server RAM)',
+    exportBtn: '📥 Download Token File (To transfer to your phone)',
     unlink: '🔓 Unlink Token (Delete from this device)',
     unlinkAlert: '✅ Your token file has been deleted from your device and wiped from server RAM.\\n\\n🔐 For complete peace of mind, we recommend updating your password at accounts.nintendo.com.'
   }
@@ -251,19 +262,20 @@ function setLang(lang) {
   const t = I18N[lang];
   document.getElementById('title').innerHTML = t.title;
   document.getElementById('privacy-note').innerHTML = t.privacy;
-  document.getElementById('incognito-tip').innerHTML = t.incognito;
+  document.getElementById('android-box').innerHTML = t.android;
   document.getElementById('lbl-discord').innerText = t.discord;
   document.getElementById('lbl-fc').innerText = t.fc;
   document.getElementById('setup-steps').innerHTML = t.steps;
-  document.getElementById('lbl-nin-link').innerText = t.ninLink;
-  document.getElementById('btn-copy-nin').innerText = t.copyBtn;
+  document.getElementById('btn-open-nin').innerText = t.openNin;
   document.getElementById('lbl-paste').innerText = t.paste;
   document.getElementById('btn-save-tok').innerText = t.saveTok;
+  document.getElementById('import-title').innerHTML = t.importTitle;
   document.getElementById('lbl-dcbin').innerText = t.dcbin;
   document.getElementById('tok-ready-msg').innerText = t.readyMsg;
   document.getElementById('offline-hint').innerText = t.hint;
   document.getElementById('btn-go-online').innerText = t.online;
   document.getElementById('btn-go-offline').innerText = t.offline;
+  document.getElementById('btn-export').innerText = t.exportBtn;
   document.getElementById('btn-unlink').innerText = t.unlink;
 }
 
@@ -273,18 +285,6 @@ function showMsg(msg, ok = true) {
   b.style.background = ok ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)';
   b.style.color = ok ? '#34d399' : '#f87171';
   b.innerText = msg;
-}
-
-function copyNintendoUrl() {
-  const input = document.getElementById('nintendoUrlInput');
-  input.select();
-  input.setSelectionRange(0, 99999);
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(input.value);
-  } else {
-    document.execCommand('copy');
-  }
-  showMsg(I18N[currentLang].copiedOk, true);
 }
 
 function refreshUI() {
@@ -318,6 +318,37 @@ function saveDcBin(ev) {
   r.readAsArrayBuffer(f);
 }
 
+// Descargar archivo zenith_token.json desde PC para pasarlo al móvil Android
+function exportTokenFile() {
+  const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
+  if (!saved.sessionToken) return showMsg('No hay token guardado todavía.', false);
+  const blob = new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'zenith_token.json';
+  a.click();
+  showMsg('📥 Archivo zenith_token.json descargado. Pásalo a tu teléfono y súbelo en la Bóveda.');
+}
+
+// Subir archivo zenith_token.json en el teléfono Android
+function importTokenFromFile(ev) {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const data = JSON.parse(r.result);
+      if (!data.sessionToken) throw new Error('Archivo inválido');
+      localStorage.setItem('zenith_local_vault', JSON.stringify(data));
+      refreshUI();
+      showMsg('✅ ¡Archivo de Token importado en tu teléfono! Ya puedes tocar PONERSE ONLINE.');
+    } catch (e) {
+      showMsg('❌ El archivo seleccionado no es un zenith_token.json válido.', false);
+    }
+  };
+  r.readAsText(f);
+}
+
 async function generateLocalToken() {
   const discordId = document.getElementById('discordId').value.trim();
   const friendCode = document.getElementById('friendCode').value.replace(/\\D/g, '');
@@ -325,7 +356,19 @@ async function generateLocalToken() {
   if (!discordId || friendCode.length !== 16) return showMsg('Ingresa tu Discord ID y tu Friend Code de 16 dígitos.', false);
 
   const m = copied.match(/session_token_code=([^&\\s]+)/);
-  if (!m) return showMsg('El link pegado no contiene session_token_code=', false);
+  if (!m) {
+    // Si pegó directamente un sessionToken ya canjeado en PC
+    if (copied.length > 40 && !copied.includes('npf')) {
+      const saved = JSON.parse(localStorage.getItem('zenith_local_vault') || '{}');
+      saved.discordId = discordId;
+      saved.friendCode = friendCode;
+      saved.sessionToken = copied;
+      localStorage.setItem('zenith_local_vault', JSON.stringify(saved));
+      refreshUI();
+      return showMsg('✅ Token directo guardado en tu dispositivo.');
+    }
+    return showMsg('El link pegado no contiene session_token_code=', false);
+  }
 
   const stMatch = copied.match(/state=([^&\\s]+)/);
   const res = await fetch('/api/exchange-token', {
@@ -342,7 +385,7 @@ async function generateLocalToken() {
   saved.sessionToken = data.sessionToken;
   localStorage.setItem('zenith_local_vault', JSON.stringify(saved));
   refreshUI();
-  showMsg('✅ Token guardado únicamente en tu dispositivo. Ya puedes ponerte Online.');
+  showMsg('✅ Token guardado localmente. Si usas Android, puedes descargar el archivo zenith_token.json con el botón gris.');
 }
 
 async function goOnline() {
@@ -425,7 +468,7 @@ const server = http.createServer(async (req, res) => {
         const entry = oauthByState.get(body.state) || oauthByUser.get(String(body.discordId || ''));
         if (!entry) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Sesión expirada. Recarga la Bóveda (F5) y copia un link nuevo.' }));
+            return res.end(JSON.stringify({ error: 'Sesión expirada. Recarga la Bóveda (F5) e intenta de nuevo.' }));
         }
         try {
             const sessionToken = await exchangeCodeWithNintendo(body.code, entry.verifier);
@@ -484,7 +527,7 @@ wss.on('connection', (ws) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════
-// Bot de Discord — Solo deja el botón de la Bóveda + Guía de Modo Incógnito
+// Bot de Discord — Guía Bilingüe (PC & iOS directo / Android importar desde PC)
 // ══════════════════════════════════════════════════════════════════════
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -548,19 +591,19 @@ client.on('interactionCreate', async (interaction) => {
             .setColor(0x10b981)
             .setDescription(
                 '### 🛡️ ¿Cómo protegemos tu cuenta?\n' +
-                '* **Cero datos guardados en el servidor:** Nosotros **NUNCA** nos quedamos con tus datos de inicio de sesión. Tu token se guarda **únicamente en la memoria local de tu dispositivo**.\n' +
-                '* **1 Única IP Fija + Sin gastar datos:** Al ponerte **Online**, el Host acepta tus solicitudes usando una única IP fija (evitando movimientos de IP). Ya no necesitas mantener conexión a internet.\n' +
-                '* **Borrado al dar Offline y Opción de Desvincular:** Al dar **Offline**, el token se borra de la memoria RAM del sistema. Además tienes el botón **Desvincular Token** para borrar el archivo local de tu teléfono cuando quieras.\n\n' +
-                '### 📋 Pasos para crear tu Token (Solo la primera vez):\n' +
-                '1. Toca el botón de abajo para abrir tu **Bóveda Local** en el navegador de tu teléfono o PC.\n' +
-                '2. Dentro de la Bóveda, toca **"📋 Paso 1: Copiar Link para Modo Incógnito"**.\n' +
-                '3. 🕶️ **En Android (Samsung/Xiaomi):** Abre una **Pestaña de Incógnito** en tu navegador (o usa el navegador nativo de Xiaomi) y pega ahí el enlace copiado.\n' +
-                '4. Inicia sesión en Nintendo. En la ventana *"Link an account"*, **NO toques el botón rojo**. Mantén presionado el botón rojo **"Select this account"** y elige **"Copiar dirección de enlace"**.\n' +
-                '5. Regresa a la pestaña de la Bóveda, pega ese enlace y toca **"💾 Guardar Token en mi Dispositivo"**.\n' +
-                '6. *(Opcional)* Sube tu archivo `dc.bin` si deseas jugar al mismo tiempo sin desconexiones, y toca **🟢 PONERSE ONLINE**.'
+                '* **Cero almacenamiento en servidor:** Nosotros **NUNCA** nos quedamos con tus datos de inicio de sesión. Tu token se guarda **únicamente de forma local en tu dispositivo**.\n' +
+                '* **1 Única IP Fija + Sin gastar internet:** Al ponerte **Online**, el Host acepta tus solicitudes usando una única IP fija (evitando saltos de IP). Ya no necesitas mantener conexión a internet.\n' +
+                '* **Borrado al dar Offline y Desvinculación:** Cuando te pones **Offline**, el token se destruye de la memoria RAM del sistema. Además cuentas con el botón **Desvincular Token** para borrar el archivo local de tu dispositivo.\n\n' +
+                '### 💻 Pasos en PC o iPhone (iOS):\n' +
+                '1. Abre tu **Bóveda Local** en el botón de abajo.\n' +
+                '2. Haz clic en **"1. Abrir Página Oficial de Nintendo"** e inicia sesión.\n' +
+                '3. En la pantalla *"Link an account"*, haz clic derecho (o mantén presionado en iOS) sobre el botón rojo **"Select this account"** y selecciona **"Copiar dirección de enlace"**.\n' +
+                '4. Regresa a la Bóveda, pega el enlace y toca **"💾 Guardar Token en este Dispositivo"**.\n' +
+                '5. *(Opcional)* Sube tu archivo `dc.bin` para jugar sin desconexiones y presiona **🟢 PONERSE ONLINE**.\n\n' +
+                '### 📱 ¿Eres usuario de Android?\n' +
+                'Genera tu Token desde una **PC** siguiendo los pasos de arriba, haz clic en **"📥 Descargar Archivo de Token (`zenith_token.json`)"**, pasa ese archivo a tu teléfono Android y súbelo en la Bóveda de tu móvil en **"Opción B — Subir Archivo de Token"**.'
             );
 
-        // ÚNICAMENTE el botón de la Bóveda
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setLabel('🔐 Abrir Mi Bóveda Local (Español)')
@@ -580,16 +623,16 @@ client.on('interactionCreate', async (interaction) => {
                 '* **Zero Server Storage:** We **NEVER** keep your login credentials. Your token file is stored **exclusively inside your own device\'s local storage**.\n' +
                 '* **Single Fixed IP + No Internet Needed:** Once you tap **Go Online**, our Host accepts friend requests using a single fixed IP (preventing IP jumps). You do not need to stay connected to the internet.\n' +
                 '* **Instant RAM Wipe & Unlink Option:** Going **Offline** immediately wipes your token from server RAM. You can also tap **Unlink Token** anytime to delete the local token from your device.\n\n' +
-                '### 📋 Steps to Create Your Token (First time only):\n' +
-                '1. Tap the button below to open your **Local Vault** in your phone or PC browser.\n' +
-                '2. Inside the Vault, tap **"📋 Step 1: Copy Link for Incognito Mode"**.\n' +
-                '3. 🕶️ **On Android (Samsung/Xiaomi):** Open an **Incognito Tab** in your browser and paste the copied link there.\n' +
-                '4. Sign in to Nintendo. On the *"Link an account"* screen, **DO NOT tap the red button**. Long-press (or right-click) the red **"Select this account"** button and choose **"Copy link address"**.\n' +
-                '5. Return to the Vault tab, paste that link, and tap **"💾 Save Token to My Device"**.\n' +
-                '6. *(Optional)* Upload your `dc.bin` file to play simultaneously without disconnects, then tap **🟢 GO ONLINE**.'
+                '### 💻 Steps on PC or iPhone (iOS):\n' +
+                '1. Open your **Local Vault** using the button below.\n' +
+                '2. Click **"1. Open Official Nintendo Page"** and sign in.\n' +
+                '3. On the *"Link an account"* screen, right-click (or long-press on iOS) the red **"Select this account"** button and choose **"Copy link address"**.\n' +
+                '4. Return to the Vault, paste the link, and click **"💾 Save Token to This Device"**.\n' +
+                '5. *(Optional)* Upload your `dc.bin` file to play without disconnects, then tap **🟢 GO ONLINE**.\n\n' +
+                '### 📱 Using an Android Phone?\n' +
+                'Generate your Token on a **PC** following the steps above, click **"📥 Download Token File (`zenith_token.json`)"**, send that file to your Android phone, and upload it inside your mobile Vault under **"Option B — Upload Token File"**.'
             );
 
-        // ÚNICAMENTE el botón de la Bóveda
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setLabel('🔐 Open My Local Vault (English)')
