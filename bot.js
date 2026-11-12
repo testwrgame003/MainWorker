@@ -174,10 +174,9 @@ function renderVaultHtml(oauthState, nintendoUrl) {
     </div>
 
     <!-- Hipervínculo directo idéntico al Paso 5 de la guía -->
-    <a href="${nintendoUrl}" target="_blank" rel="noopener noreferrer" class="btn-link btn-primary" id="btn-open-nin">
+    <a href="/go-nintendo?state=${oauthState}" target="_blank" class="btn-link btn-primary" id="btn-open-nin">
       🔗 Paso 1: Click aquí para iniciar sesión en Nintendo
     </a>
-
     <label id="lbl-paste">Paso 3: Pega aquí el enlace copiado (npf045ab...)</label>
     <input type="text" id="copiedLink" placeholder="npf045ab1d9068381b3://auth#session_token_code=...">
     <button class="btn btn-online" onclick="generateLocalToken()" id="btn-save-tok">💾 Guardar Token en mi Dispositivo</button>
@@ -412,8 +411,32 @@ const server = http.createServer(async (req, res) => {
 
     if (urlObj.pathname === '/vault' || urlObj.pathname === '/') {
         const auth = createNintendoAuthSession();
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        // Guardamos también la URL exacta asociada a ese state
+        const saved = oauthVerifiers.get(auth.state);
+        if (saved) saved.url = auth.url;
+
+        res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
+        });
         return res.end(renderVaultHtml(auth.state, auth.url));
+    }
+
+    // Ruta puente para evitar que Android (Samsung / Xiaomi) corrompa los parámetros OAuth
+    if (urlObj.pathname === '/go-nintendo') {
+        const state = urlObj.searchParams.get('state') || '';
+        const entry = oauthVerifiers.get(state);
+        if (!entry || !entry.url) {
+            const fresh = createNintendoAuthSession();
+            res.writeHead(302, { 'Location': fresh.url, 'Cache-Control': 'no-store' });
+            return res.end();
+        }
+        res.writeHead(302, {
+            'Location': entry.url,
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Referrer-Policy': 'no-referrer'
+        });
+        return res.end();
     }
 
     if (urlObj.pathname === '/api/exchange-token' && req.method === 'POST') {
