@@ -30,24 +30,44 @@ let hostSocket = null;
 // Helper: Generar URL OAuth PKCE de Nintendo y canjear session_token_code
 // ══════════════════════════════════════════════════════════════════════
 function createNintendoAuthUrl() {
-    const verifier = crypto.randomBytes(32).toString('base64url');
-    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-    const state = crypto.randomBytes(24).toString('base64url');
+    // 1. Generar verifier y challenge en Base64URL limpio (estándar oficial de Nintendo SDK)
+    const verifier = crypto.randomBytes(32)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+
+    const challenge = crypto.createHash('sha256')
+        .update(verifier)
+        .digest('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+
+    // 2. State alfanumérico de 36 bytes en Base64URL
+    const state = crypto.randomBytes(36)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+
     oauthVerifiers.set(state, { verifier, createdAt: Date.now() });
 
-    const params = querystring.stringify({
-        state,
+    // 3. Scopes exactos permitidos por Nintendo para Pokémon TCG Pocket (045ab1d9068381b3)
+    const params = new URLSearchParams({
+        state: state,
         redirect_uri: `npf${NINTENDO_CLIENT_ID}://auth`,
         client_id: NINTENDO_CLIENT_ID,
-        scope: 'openid user user.birthday user.mii user.screenName',
+        scope: 'openid user user.birthday',
         response_type: 'session_token_code',
         session_token_code_challenge: challenge,
         session_token_code_challenge_method: 'S256',
         theme: 'login_form'
     });
+
     return {
         state,
-        url: `https://accounts.nintendo.com/connect/1.0.0/authorize?${params}`
+        url: `https://accounts.nintendo.com/connect/1.0.0/authorize?${params.toString()}`
     };
 }
 
