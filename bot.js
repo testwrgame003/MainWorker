@@ -38,7 +38,6 @@ function base64UrlClean(buffer) {
 }
 
 function createNintendoAuthForUser(discordId = '') {
-    // Exactamente 32 bytes aleatorios en Base64URL (43 chars) — estándar estricto del SDK de Nintendo Android
     const verifier = base64UrlClean(crypto.randomBytes(32));
     const challenge = base64UrlClean(crypto.createHash('sha256').update(verifier).digest());
     const state = base64UrlClean(crypto.randomBytes(36));
@@ -47,17 +46,17 @@ function createNintendoAuthForUser(discordId = '') {
     oauthByState.set(state, record);
     if (discordId) oauthByUser.set(String(discordId), record);
 
-    // IMPORTANTE PARA ANDROID: Usar %20 (nunca '+') en scope para que el redirect del código de correo no falle
+    // SIN theme=login_form (para que use tu sesión ya abierta y NO pida correo otra vez)
+    // Y SIN user.mii / user.screenName (que causaban "La solicitud no es válida" en TCG Pocket)
     const authorizeUrl =
         `https://accounts.nintendo.com/connect/1.0.0/authorize` +
-        `?state=${state}` +
-        `&redirect_uri=npf${NINTENDO_CLIENT_ID}://auth` +
-        `&client_id=${NINTENDO_CLIENT_ID}` +
-        `&scope=openid%20user%20user.birthday%20user.mii%20user.screenName` +
+        `?client_id=${NINTENDO_CLIENT_ID}` +
+        `&redirect_uri=${encodeURIComponent(`npf${NINTENDO_CLIENT_ID}://auth`)}` +
         `&response_type=session_token_code` +
+        `&scope=${encodeURIComponent('openid user user.birthday')}` +
         `&session_token_code_challenge=${challenge}` +
         `&session_token_code_challenge_method=S256` +
-        `&theme=login_form`;
+        `&state=${state}`;
 
     return { state, verifier, url: authorizeUrl };
 }
