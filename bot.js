@@ -19,7 +19,8 @@ const PUBLIC_URL = (process.env.RAILWAY_PUBLIC_DOMAIN
     : (process.env.PUBLIC_URL || `http://localhost:${PORT}`)).replace(/\/$/, '');
 
 // Client ID oficial que carga "Link an account" en Android, iOS y PC sin bloqueos
-const NINTENDO_CLIENT_ID = '71b963c1b7b6d119';
+
+const NINTENDO_CLIENT_ID = '96cceb7c988bf040';
 
 // Memoria RAM efímera: solo conserva las cuentas que están ONLINE en este momento.
 // Al pasar a Offline o Desvincular, se eliminan inmediatamente de la RAM.
